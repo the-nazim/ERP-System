@@ -3,8 +3,10 @@ const User = require('./models');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const auth = require('./middleware/auth');
+const role = require('./middleware/role');
 const router = express.Router();
 
+// User login
 router.post('/login', async (req, res) => {
     try {
         const {email, password} = req.body;
@@ -42,10 +44,12 @@ router.post('/login', async (req, res) => {
     }
 });
 
+// User signup
 router.post('/signup', async (req, res) => {
     try {
         const { name, email, password } = req.body;
-        
+        const role = req.body.role === 'admin' ? 'user' : 'user';
+
         if (!name || !email || !password) {
             return res.status(400).json({ msg: 'Please enter all fields' });
         }
@@ -60,7 +64,8 @@ router.post('/signup', async (req, res) => {
         const newUser = await User.create({
             name,
             email,
-            password: hashedPassword // Assume hashedPassword is defined elsewhere
+            password: hashedPassword, // Assume hashedPassword is defined elsewhere
+            role: role
         });
 
         res.json({
@@ -74,9 +79,44 @@ router.post('/signup', async (req, res) => {
     }
 });
 
-router.get('/', async (req, res) => {
+// Create a new admin user (admin only)
+router.post('/create-admin', auth, role('admin'), async (req, res) => {
     try {
-        const users = await User.find().select('-password');
+        const { name, email, password } = req.body;
+
+        if (!name || !email || !password) 
+            return res.status(400).json({ msg: 'Please enter all fields' });
+
+        const existingUser = await User.findOne({email});
+        if (existingUser)
+            return res.status(400).json({ msg: 'User already exists' });
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const newAdmin = await User.create({
+            name,
+            email,
+            password: hashedPassword,
+            role: 'admin'
+        });
+
+        res.json({
+            id: newAdmin._id,
+            name: newAdmin.name,
+            email: newAdmin.email,
+            role: newAdmin.role
+        });
+    }
+    catch (err) {
+        res.status(500).json({ msg: 'Server error' });
+    }
+});
+
+
+// Get list of all users (admin only)
+router.get('/list', auth, role('admin'), async (req, res) => {
+    try {
+        const users = await User.find({role: 'user'}).select('-password');
         res.json(users);
     }
     catch (err) {
@@ -84,9 +124,15 @@ router.get('/', async (req, res) => {
     }
 });
 
-router.delete('/:id', async (req, res) => {
+// Delete a user by ID (admin only)
+router.delete('/:id', auth, role('admin'), async (req, res) => {
     try {
         const user = await User.findById(req.params.id);
+        
+        if (!user) 
+            return res.status(404).json({ msg: 'User not found' });
+        
+        await user.remove();
         res.json({ msg: 'User deleted', user });
     }
     catch (err) {
@@ -94,8 +140,9 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
-router.put("/:id", auth, async (req, res) => {
-  if (req.user !== req.params.id)
+// Update user details (self-update only)
+router.put("/me/update", auth, async (req, res) => {
+  if (req.user.id !== req.params.id)
     return res.status(403).json({ message: "Unauthorized" });
 
   const { name, email } = req.body;
@@ -109,9 +156,10 @@ router.put("/:id", auth, async (req, res) => {
   res.json(updatedUser);
 });
 
-
-router.get("/home", auth, async (req, res) => {
-    res.json({ message: `Welcome User ${req.user}` });
+// Get user details by ID (self-access only)
+router.get("/me", auth,async (req, res) => {
+    const user = await User.findById(req.user.id).select("name email");
+    res.json({ message: `Welcome ${user.name}  ${user.email}` });
 });
 
 
